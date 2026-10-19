@@ -174,7 +174,8 @@
         const { data: { text } } = await worker.recognize(selectedFile);
         await worker.terminate();
         result.value = text.trim();
-        setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);\n        extractConcept2(result.value);
+        setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);
+        extractConcept2(result.value);
         progressBar.style.width = '100%';
       } catch (error) {
         setStatus('読み取りに失敗しました。インターネット接続を確認し、画像を選び直して試してください。', true);
