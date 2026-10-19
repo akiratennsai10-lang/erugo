@@ -46,7 +46,7 @@
     .progress span { display:block; height:100%; width:0; background:#4c8b6b; transition:width .2s; }
     .privacy { margin-top:16px; border-radius:12px; background:#edf2ee; padding:13px 14px; font-size:12px; color:#4f6256; line-height:1.7; }
     footer { text-align:center; color:var(--muted); font-size:12px; padding:0 16px 24px; }
-    @media (max-width:680px) { .layout { grid-template-columns:1fr; } main { padding-top:20px; } .intro h2 { font-size:22px; } .card { padding:17px; } }
+    .record-card { margin-top:16px; } .record-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; } .record-field label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; } .record-field input { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit; } .record-note { margin-top:12px; font-size:13px; line-height:1.65; color:var(--muted); } .record-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; } .record-actions .primary { width:auto; margin-top:0; } @media (max-width:680px) { .layout { grid-template-columns:1fr; } main { padding-top:20px; } .intro h2 { font-size:22px; } .card { padding:17px; } }
   </style>
 </head>
 <body>
@@ -85,7 +85,19 @@
       </section>
     </div>
   </main>
-  <footer>部活OCR · 試作版</footer>
+
+    <section class="card record-card">
+      <h3>③ Concept2 記録を抽出</h3>
+      <p class="hint">OCR結果から距離と最終タイムの候補を自動入力します。読み取り後に確認・修正できます。</p>
+      <div class="record-grid">
+        <div class="record-field"><label for="distanceField">距離（m）</label><input id="distanceField" inputmode="numeric" placeholder="例：2000"></div>
+        <div class="record-field"><label for="timeField">最終タイム（例 7:12.3）</label><input id="timeField" placeholder="例：7:12.3"></div>
+      </div>
+      <div class="record-note" id="extractNote" role="status">画像を読み取ると、距離とタイムの候補を表示します。</div>
+      <div class="record-actions"><button class="primary" id="extractButton" type="button">OCR結果から再抽出</button><button class="secondary" id="copyRecordButton" type="button">記録をコピー</button></div>
+    </section>
+  </main>
+  <footer>部活OCR · Concept2記録 試作版</footer>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script>
     const imageInput = document.getElementById('imageInput');
@@ -93,7 +105,28 @@
     const previewWrap = document.getElementById('previewWrap');
     const readButton = document.getElementById('readButton');
     const result = document.getElementById('result');
+
     const status = document.getElementById('status');
+    const distanceField = document.getElementById('distanceField');
+    const timeField = document.getElementById('timeField');
+    const extractNote = document.getElementById('extractNote');
+
+    function extractConcept2(text) {
+      const normalized = (text || '').replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/[：]/g, ':').replace(/[．。]/g, '.');
+      // Only accept an explicitly labeled total time; do not mistake a split or /500m pace for the final time.
+      const total = normalized.match(/(?:total\s*time|finish\s*time|final\s*time|elapsed\s*time|合計タイム|総タイム|最終タイム|トータルタイム)\s*[:：]?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)/i);
+      let d = '';
+      const distanceLabel = normalized.match(/(?:distance|距離)\s*[:：]?\s*(\d{2,5})\s*m?/i);
+      const heading = normalized.match(/(?:^|\n)\s*(\d{2,5})\s*m\s*(?:\n|$)/i);
+      const meter = normalized.match(/meter\s*\n?\s*(\d{2,5})/i);
+      if (distanceLabel) d = distanceLabel[1]; else if (heading) d = heading[1]; else if (meter) d = meter[1];
+      if (d) distanceField.value = d;
+      if (total) timeField.value = total[1];
+      if (total && d) extractNote.textContent = '距離と合計タイムの候補を読み取りました。画面と照らし合わせて確認してください。';
+      else if (d) extractNote.textContent = '距離は ' + d + 'm と読み取れました。最終タイムは確実に判定できなかったため自動入力していません。この写真のような「View Detail」は区間タイム（例：16.1秒）や/500mペース（例：1:20.5）を表示する画面で、合計タイムとは限りません。合計タイムが表示された概要画面を使ってください。';
+      else extractNote.textContent = '距離を特定できませんでした。OCR結果を確認してください。区間タイムや/500mペースを最終タイムと誤認しないよう、合計と明記されたタイムだけを自動入力します。';
+    }
+
     const progress = document.getElementById('progress');
     const progressBar = document.getElementById('progressBar');
     let selectedFile = null;
@@ -141,7 +174,7 @@
         const { data: { text } } = await worker.recognize(selectedFile);
         await worker.terminate();
         result.value = text.trim();
-        setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);
+        setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);\n        extractConcept2(result.value);
         progressBar.style.width = '100%';
       } catch (error) {
         setStatus('読み取りに失敗しました。インターネット接続を確認し、画像を選び直して試してください。', true);
@@ -163,6 +196,15 @@
         result.select();
         setStatus('文字を選択しました。Macなら Command + C でコピーできます。');
       }
+    });
+
+    document.getElementById('extractButton').addEventListener('click', () => extractConcept2(result.value));
+    document.getElementById('copyRecordButton').addEventListener('click', async () => {
+      const d = distanceField.value.trim(), t = timeField.value.trim();
+      if (!d && !t) { setStatus('コピーする記録がありません。', true); return; }
+      const record = '距離: ' + (d ? d + ' m' : '未判定') + '\\n最終タイム: ' + (t || '未判定');
+      try { await navigator.clipboard.writeText(record); setStatus('Concept2の記録をコピーしました。'); }
+      catch { setStatus('距離: ' + (d || '未判定') + 'm、最終タイム: ' + (t || '未判定') + '。コピーできない場合は手動で写してください。'); }
     });
     document.getElementById('clearButton').addEventListener('click', () => {
       result.value = '';
