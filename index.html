@@ -129,9 +129,10 @@
       // On the Detail screen, columns are "time meter /500m"; row examples look like ":16.1 100 1:20.5".
       // The first value is the time for that row. The /500m value is pace, not the final time.
       const detailRows = [];
-      for (const line of lines) {
-        const row = line.match(/^:?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\s+(\d{2,5})\s+(?:\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\b/);
-        if (row) detailRows.push({ time: row[1], meters: row[2] });
+      const rowPattern = /:?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\s+(\d{2,5})\s+(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\b/g;
+      let rowMatch;
+      while ((rowMatch = rowPattern.exec(normalized)) !== null) {
+        detailRows.push({ time: rowMatch[1], meters: rowMatch[2] });
       }
 
       const total = normalized.match(/(?:total\s*time|finish\s*time|final\s*time|elapsed\s*time|合計タイム|総タイム|最終タイム|トータルタイム|workout\s*time)\s*[:：]?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}:\d{2}:\d{2})/i);
