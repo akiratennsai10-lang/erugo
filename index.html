@@ -126,13 +126,14 @@
       else if (heading) d = heading[1];
       else if (meter) d = meter[1];
 
-      // On the Detail screen, columns are "time meter /500m"; row examples look like ":16.1 100 1:20.5".
-      // The first value is the time for that row. The /500m value is pace, not the final time.
+      // Concept2 detail rows include a summary row (e.g. 6:52.0 2000 1:43.0)
+      // followed by split rows (1:44.3 500 1:44.3). Prefer the row whose meter
+      // value equals the overall distance, even if OCR spacing is imperfect.
       const detailRows = [];
-      const rowPattern = /:?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\s+(\d{2,5})\s+(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)\b/g;
+      const rowPattern = /(\d{1,2}:\d{2}\.\d|\d{1,2}:\d{2}|\d{1,2}\.\d)\s+(\d{2,5})\s+(\d{1,2}:\d{2}\.\d|\d{1,2}:\d{2}|\d{1,2}\.\d)/g;
       let rowMatch;
       while ((rowMatch = rowPattern.exec(normalized)) !== null) {
-        detailRows.push({ time: rowMatch[1], meters: rowMatch[2] });
+        detailRows.push({ time: rowMatch[1], meters: rowMatch[2], pace: rowMatch[3] });
       }
 
       const total = normalized.match(/(?:total\s*time|finish\s*time|final\s*time|elapsed\s*time|合計タイム|総タイム|最終タイム|トータルタイム|workout\s*time)\s*[:：]?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}:\d{2}:\d{2})/i);
@@ -144,15 +145,15 @@
       } else if (detailRows.length) {
         // On Concept2 View Detail screens, the first row is the workout summary:
         // e.g. 6:52.0 2000 1:43.0. Later rows are individual 500m splits.
-        const summaryRow = detailRows.find(row => d && row.meters === d && /^\d{1,2}:\d{2}(?:\.\d)?$/.test(row.time));
+        const summaryRow = d ? detailRows.find(row => Number(row.meters) === Number(d)) : null;
         if (summaryRow) {
           timeField.value = summaryRow.time;
-          extractNote.textContent = '詳細画面の先頭にある合計記録行から最終タイム候補 ' + summaryRow.time + '、距離 ' + d + 'm を抽出しました。必ず元画像と照らし合わせて確認してください。';
+          extractNote.textContent = '距離が全体距離と一致する記録行から合計タイム候補 ' + summaryRow.time + ' を抽出しました（/500mペース ' + summaryRow.pace + ' とは別です）。元画像で確認してください。';
         } else {
           const first = detailRows[0];
           timeField.value = first.time;
           if (!d) distanceField.value = first.meters;
-          extractNote.textContent = '詳細画面の先頭行からタイム候補 ' + first.time + ' を抽出しました。合計タイムかどうかを元画像で確認してください。';
+          extractNote.textContent = 'タイム候補 ' + first.time + ' を抽出しましたが、合計タイムか確認できません。元画像を確認してください。';
         }
       } else if (d) {
         extractNote.textContent = '距離は ' + d + 'm と読み取れましたが、タイムを見つけられませんでした。文字欄に表示されたOCR結果を確認してください。';
