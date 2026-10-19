@@ -155,17 +155,39 @@
           timeField.value = summaryRow.time;
           extractNote.textContent = '全体距離 ' + d + 'm と同じ行から合計タイム ' + summaryRow.time + ' を取得しました。ペース ' + summaryRow.pace + ' とは区別しています。';
         } else {
-          // If OCR split the columns strangely, never silently use a 500m split as total time.
-          const fullDistanceRow = d ? lines.find(line => new RegExp('\\b' + d + '\\b').test(line) && /\d{1,2}:\d{2}/.test(line)) : null;
-          if (fullDistanceRow) {
-            const firstTime = fullDistanceRow.match(/\d{1,2}:\d{2}(?:\.\d)?/);
-            if (firstTime) {
-              timeField.value = firstTime[0];
-              extractNote.textContent = '全体距離と同じ行からタイム候補 ' + firstTime[0] + ' を取得しました。元画像で確認してください。';
+          // If the total-distance row wasn't recognized, look for split rows (500, 1000, ...)
+          // and sum their first time values. Never use the first split as the workout total.
+          const splitRows = detailRows
+            .filter(row => Number(row.meters) > 0 && Number(row.meters) < Number(d || 0)
+              && Number(row.meters) % 500 === 0)
+            .sort((a, b) => Number(a.meters) - Number(b.meters));
+          const uniqueSplits = [];
+          const seenMeters = new Set();
+          for (const row of splitRows) {
+            if (!seenMeters.has(row.meters)) {
+              uniqueSplits.push(row);
+              seenMeters.add(row.meters);
+            }
+          }
+          if (d && uniqueSplits.length >= 2) {
+            const toSeconds = value => {
+              const m = value.match(/^(\d{1,2}):(\d{2})(?:\.(\d))?$/);
+              return m ? Number(m[1]) * 60 + Number(m[2]) + Number('0.' + (m[3] || '0')) : null;
+            };
+            const splitSeconds = uniqueSplits.map(row => toSeconds(row.time));
+            if (splitSeconds.every(value => value !== null)) {
+              const totalSeconds = splitSeconds.reduce((sum, value) => sum + value, 0);
+              const minutes = Math.floor(totalSeconds / 60);
+              const seconds = (totalSeconds % 60).toFixed(1).padStart(4, '0');
+              timeField.value = minutes + ':' + seconds;
+              extractNote.textContent = '全体距離の記録行が見つからなかったため、認識した区間タイムを合計して ' + timeField.value + ' としました。元画像で必ず確認してください。';
+            } else {
+              timeField.value = '';
+              extractNote.textContent = '合計タイムの行を特定できませんでした。誤った値を入れないよう、タイム欄は空欄にしました。';
             }
           } else {
             timeField.value = '';
-            extractNote.textContent = '距離は読み取れましたが、合計タイムの行を特定できませんでした。500mごとのタイムを合計タイムとして入れないよう、タイム欄は空欄にしました。';
+            extractNote.textContent = '合計タイムの行を特定できませんでした。誤った値を入れないよう、タイム欄は空欄にしました。';
           }
         }
       } else if (d) {
