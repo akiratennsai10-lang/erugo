@@ -112,19 +112,22 @@
     const extractNote = document.getElementById('extractNote');
 
     function extractConcept2(text) {
-      const normalized = (text || '').replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/[：]/g, ':').replace(/[．。]/g, '.');
-      // Only accept an explicitly labeled total time; do not mistake a split or /500m pace for the final time.
-      const total = normalized.match(/(?:total\s*time|finish\s*time|final\s*time|elapsed\s*time|合計タイム|総タイム|最終タイム|トータルタイム)\s*[:：]?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}\.\d)/i);
+      const normalized = (text || '').replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/[：]/g, ':').replace(/[．。]/g, '.').replace(/[Oo]/g, '0');
+      // Accept clear distance headings such as "100m" or "2000 m".
       let d = '';
       const distanceLabel = normalized.match(/(?:distance|距離)\s*[:：]?\s*(\d{2,5})\s*m?/i);
-      const heading = normalized.match(/(?:^|\n)\s*(\d{2,5})\s*m\s*(?:\n|$)/i);
+      const heading = normalized.match(/(?:^|\n)\s*(\d{2,5})\s*m\b/i);
       const meter = normalized.match(/meter\s*\n?\s*(\d{2,5})/i);
       if (distanceLabel) d = distanceLabel[1]; else if (heading) d = heading[1]; else if (meter) d = meter[1];
       if (d) distanceField.value = d;
+
+      // A detail/interval screen often contains pace (e.g. 1:20.5 /500m), not the workout's final time.
+      // Only auto-fill time when it is explicitly labeled as total/finish/elapsed time.
+      const total = normalized.match(/(?:total\s*time|finish\s*time|final\s*time|elapsed\s*time|合計タイム|総タイム|最終タイム|トータルタイム|workout\s*time)\s*[:：]?\s*(\d{1,2}:\d{2}(?:\.\d)?|\d{1,2}:\d{2}:\d{2})/i);
       if (total) timeField.value = total[1];
-      if (total && d) extractNote.textContent = '距離と合計タイムの候補を読み取りました。画面と照らし合わせて確認してください。';
-      else if (d) extractNote.textContent = '距離は ' + d + 'm と読み取れました。最終タイムは確実に判定できなかったため自動入力していません。この写真のような「View Detail」は区間タイム（例：16.1秒）や/500mペース（例：1:20.5）を表示する画面で、合計タイムとは限りません。合計タイムが表示された概要画面を使ってください。';
-      else extractNote.textContent = '距離を特定できませんでした。OCR結果を確認してください。区間タイムや/500mペースを最終タイムと誤認しないよう、合計と明記されたタイムだけを自動入力します。';
+      if (total && d) extractNote.textContent = '距離と最終タイムの候補を読み取りました。必ずモニターの表示と照らし合わせてください。';
+      else if (d) extractNote.textContent = '距離は ' + d + 'm と読み取れました。最終タイムは見つかりませんでした。/500m のペースや区間タイムは最終タイムではないため、自動入力していません。合計タイムが表示される概要画面の写真を使ってください。';
+      else extractNote.textContent = '距離を見つけられませんでした。下のOCR文字欄を確認してください。モニターの数字が小さい場合は、画面部分を近くから撮影して試してください。';
     }
 
     const progress = document.getElementById('progress');
@@ -162,7 +165,8 @@
       progressBar.style.width = '0%';
       setStatus('OCRエンジンを準備しています。初回は言語データの読み込みに時間がかかります。');
       try {
-        const worker = await Tesseract.createWorker('jpn+eng', 1, {
+        // Concept2 display is mostly digits and English. English-only model loads faster than Japanese+English.
+        const worker = await Tesseract.createWorker('eng', 1, {
           logger: message => {
             if (message.status) {
               const pct = Math.round((message.progress || 0) * 100);
@@ -171,14 +175,30 @@
             }
           }
         });
-        const { data: { text } } = await worker.recognize(selectedFile);
+        // Enlarge and increase contrast to help OCR read the small LCD digits.
+        const source = await createImageBitmap(selectedFile);
+        const scale = Math.max(2, Math.min(4, 1800 / Math.max(source.width, source.height)));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(source.width * scale);
+        canvas.height = Math.round(source.height * scale);
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        for (let i = 0; i < pixels.data.length; i += 4) {
+          const gray = (pixels.data[i] * 0.299 + pixels.data[i + 1] * 0.587 + pixels.data[i + 2] * 0.114);
+          const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
+          pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = contrast;
+        }
+        ctx.putImageData(pixels, 0, 0);
+        const { data: { text } } = await worker.recognize(canvas);
         await worker.terminate();
+        source.close();
         result.value = text.trim();
         setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);
         extractConcept2(result.value);
         progressBar.style.width = '100%';
       } catch (error) {
-        setStatus('読み取りに失敗しました。インターネット接続を確認し、画像を選び直して試してください。', true);
+        setStatus('読み取りに失敗しました: ' + (error && error.message ? error.message : 'OCRエンジンまたは画像処理のエラー') + '。インターネット接続を確認して再試行してください。', true);
         console.error(error);
       } finally {
         isReading = false;
