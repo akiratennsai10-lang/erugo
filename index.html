@@ -142,10 +142,18 @@
         timeField.value = total[1];
         extractNote.textContent = '合計タイムの候補を読み取りました。表示と照らし合わせて確認してください。';
       } else if (detailRows.length) {
-        const last = detailRows[detailRows.length - 1];
-        timeField.value = last.time;
-        if (!d) distanceField.value = last.meters;
-        extractNote.textContent = '詳細画面の最終行から ' + last.time + ' 秒（行の時間）を読み取りました。/500m のペースとは別の値です。複数の行がある場合、これは最後の行の時間であり、ワークアウト全体の合計タイムとは限らないので確認してください。';
+        // On Concept2 View Detail screens, the first row is the workout summary:
+        // e.g. 6:52.0 2000 1:43.0. Later rows are individual 500m splits.
+        const summaryRow = detailRows.find(row => d && row.meters === d && /^\d{1,2}:\d{2}(?:\.\d)?$/.test(row.time));
+        if (summaryRow) {
+          timeField.value = summaryRow.time;
+          extractNote.textContent = '詳細画面の先頭にある合計記録行から最終タイム候補 ' + summaryRow.time + '、距離 ' + d + 'm を抽出しました。必ず元画像と照らし合わせて確認してください。';
+        } else {
+          const first = detailRows[0];
+          timeField.value = first.time;
+          if (!d) distanceField.value = first.meters;
+          extractNote.textContent = '詳細画面の先頭行からタイム候補 ' + first.time + ' を抽出しました。合計タイムかどうかを元画像で確認してください。';
+        }
       } else if (d) {
         extractNote.textContent = '距離は ' + d + 'm と読み取れましたが、タイムを見つけられませんでした。文字欄に表示されたOCR結果を確認してください。';
       } else {
