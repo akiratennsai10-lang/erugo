@@ -155,40 +155,10 @@
           timeField.value = summaryRow.time;
           extractNote.textContent = '全体距離 ' + d + 'm と同じ行から合計タイム ' + summaryRow.time + ' を取得しました。ペース ' + summaryRow.pace + ' とは区別しています。';
         } else {
-          // If the total-distance row wasn't recognized, look for split rows (500, 1000, ...)
-          // and sum their first time values. Never use the first split as the workout total.
-          const splitRows = detailRows
-            .filter(row => Number(row.meters) > 0 && Number(row.meters) < Number(d || 0)
-              && Number(row.meters) % 500 === 0)
-            .sort((a, b) => Number(a.meters) - Number(b.meters));
-          const uniqueSplits = [];
-          const seenMeters = new Set();
-          for (const row of splitRows) {
-            if (!seenMeters.has(row.meters)) {
-              uniqueSplits.push(row);
-              seenMeters.add(row.meters);
-            }
-          }
-          if (d && uniqueSplits.length >= 2) {
-            const toSeconds = value => {
-              const m = value.match(/^(\d{1,2}):(\d{2})(?:\.(\d))?$/);
-              return m ? Number(m[1]) * 60 + Number(m[2]) + Number('0.' + (m[3] || '0')) : null;
-            };
-            const splitSeconds = uniqueSplits.map(row => toSeconds(row.time));
-            if (splitSeconds.every(value => value !== null)) {
-              const totalSeconds = splitSeconds.reduce((sum, value) => sum + value, 0);
-              const minutes = Math.floor(totalSeconds / 60);
-              const seconds = (totalSeconds % 60).toFixed(1).padStart(4, '0');
-              timeField.value = minutes + ':' + seconds;
-              extractNote.textContent = '全体距離の記録行が見つからなかったため、認識した区間タイムを合計して ' + timeField.value + ' としました。元画像で必ず確認してください。';
-            } else {
-              timeField.value = '';
-              extractNote.textContent = '合計タイムの行を特定できませんでした。誤った値を入れないよう、タイム欄は空欄にしました。';
-            }
-          } else {
-            timeField.value = '';
-            extractNote.textContent = '合計タイムの行を特定できませんでした。誤った値を入れないよう、タイム欄は空欄にしました。';
-          }
+          // Never guess the workout total from split times. If the row matching
+          // the full distance is missing, leave the time blank for manual checking.
+          timeField.value = '';
+          extractNote.textContent = '全体距離 ' + (d || '不明') + 'm と一致する記録行を見つけられませんでした。500mごとのタイムを合計タイムとして誤登録しないよう、タイム欄は空欄にしました。OCR結果と元画像を確認してください。';
         }
       } else if (d) {
         extractNote.textContent = '距離は ' + d + 'm と読み取れましたが、タイムを見つけられませんでした。文字欄に表示されたOCR結果を確認してください。';
@@ -241,26 +211,56 @@
             }
           }
         });
-        // Enlarge and increase contrast to help OCR read the small LCD digits.
+        // Free accuracy improvement: OCR the same enlarged image in three variants.
+        // Different LCD contrast/brightness can make different digits easier to recognize.
         const source = await createImageBitmap(selectedFile);
-        const scale = Math.max(2, Math.min(4, 1800 / Math.max(source.width, source.height)));
+        const scale = Math.max(2, Math.min(4, 2200 / Math.max(source.width, source.height)));
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(source.width * scale);
         canvas.height = Math.round(source.height * scale);
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        for (let i = 0; i < pixels.data.length; i += 4) {
-          const gray = (pixels.data[i] * 0.299 + pixels.data[i + 1] * 0.587 + pixels.data[i + 2] * 0.114);
-          const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
-          pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = contrast;
+        const originalPixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const contrastCanvas = document.createElement('canvas');
+        contrastCanvas.width = canvas.width; contrastCanvas.height = canvas.height;
+        const contrastCtx = contrastCanvas.getContext('2d', { willReadFrequently: true });
+        const contrastPixels = contrastCtx.createImageData(canvas.width, canvas.height);
+        const thresholdCanvas = document.createElement('canvas');
+        thresholdCanvas.width = canvas.width; thresholdCanvas.height = canvas.height;
+        const thresholdCtx = thresholdCanvas.getContext('2d', { willReadFrequently: true });
+        const thresholdPixels = thresholdCtx.createImageData(canvas.width, canvas.height);
+        for (let i = 0; i < originalPixels.data.length; i += 4) {
+          const gray = originalPixels.data[i] * 0.299 + originalPixels.data[i + 1] * 0.587 + originalPixels.data[i + 2] * 0.114;
+          const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.8 + 128));
+          contrastPixels.data[i] = contrastPixels.data[i + 1] = contrastPixels.data[i + 2] = contrast;
+          contrastPixels.data[i + 3] = 255;
+          const binary = gray > 150 ? 255 : 0;
+          thresholdPixels.data[i] = thresholdPixels.data[i + 1] = thresholdPixels.data[i + 2] = binary;
+          thresholdPixels.data[i + 3] = 255;
         }
-        ctx.putImageData(pixels, 0, 0);
-        const { data: { text } } = await worker.recognize(canvas);
+        contrastCtx.putImageData(contrastPixels, 0, 0);
+        thresholdCtx.putImageData(thresholdPixels, 0, 0);
+        const variants = [
+          { name: '拡大画像', image: canvas },
+          { name: 'コントラスト調整', image: contrastCanvas },
+          { name: '白黒二値化', image: thresholdCanvas }
+        ];
+        let best = { text: '', confidence: -1, name: '' };
+        const attempts = [];
+        for (let i = 0; i < variants.length; i++) {
+          setStatus('読み取り精度を比較中… ' + (i + 1) + '/' + variants.length + '（' + variants[i].name + '）');
+          const { data } = await worker.recognize(variants[i].image);
+          const candidate = { text: (data.text || '').trim(), confidence: Number(data.confidence || 0), name: variants[i].name };
+          attempts.push(candidate);
+          if (candidate.text && candidate.confidence > best.confidence) best = candidate;
+          progressBar.style.width = Math.round((i + 1) / variants.length * 100) + '%';
+        }
         await worker.terminate();
         source.close();
-        result.value = text.trim();
-        setStatus(result.value ? '読み取りが完了しました。結果を確認して、必要なら修正してください。' : '文字を読み取れませんでした。画像を明るくして、もう一度試してください。', !result.value);
+        result.value = best.text;
+        setStatus(result.value
+          ? '3種類の画像処理を無料で比較し、「' + best.name + '」の結果を表示しました（OCR信頼度 ' + Math.round(best.confidence) + '）。数字やタイムは元画像と照合してください。'
+          : '文字を読み取れませんでした。画面部分を大きく切り抜いて、もう一度試してください。', !result.value);
         extractConcept2(result.value);
         progressBar.style.width = '100%';
       } catch (error) {
